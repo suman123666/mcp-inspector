@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cline MCP 提示词抓包</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg2: #161b22;
+  --bg3: #21262d;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text2: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #bc8cff;
+  --orange: #f0883e;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+header h1 { font-size: 16px; color: var(--accent); font-weight: 600; }
+header .stats { font-size: 12px; color: var(--text2); }
+header .actions { margin-left: auto; display: flex; gap: 8px; }
+.btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: all .15s;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.sidebar {
+  width: 380px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.capture-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .15s;
+}
+.capture-item:hover { background: var(--bg2); }
+.capture-item.selected { background: var(--bg3); border-left: 3px solid var(--accent); }
+.capture-item .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.capture-item .time { font-size: 11px; color: var(--text2); }
+.capture-item .model { font-size: 11px; color: var(--purple); }
+.capture-item .badges { display: flex; gap: 4px; margin: 4px 0; flex-wrap: wrap; }
+.badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+.badge.msgs { color: var(--green); border-color: #238636; }
+.badge.tools { color: var(--yellow); border-color: #9e6a03; }
+.badge.duration { color: var(--text2); }
+.badge.tool-call { color: var(--orange); border-color: var(--orange); }
+.capture-item .preview {
+  font-size: 12px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+.content-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text2);
+  font-size: 14px;
+  flex-direction: column;
+  gap: 8px;
+}
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.tab {
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text2);
+  border-bottom: 2px solid transparent;
+  transition: all .15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* 消息列表 */
+.message {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 20px;
+}
+.message .msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.role-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.role-system { background: #1f3a5f; color: #79c0ff; }
+.role-user { background: #1a4731; color: #56d364; }
+.role-assistant { background: #3d1f5c; color: #d2a8ff; }
+.role-tool { background: #5c3d1f; color: #f0b050; }
+.msg-length { font-size: 11px; color: var(--text2); }
+.msg-content {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.msg-content.expanded { max-height: none; }
+.expand-btn {
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  margin-top: 4px;
+  display: inline-block;
+}
+.tool-call-block {
+  margin-top: 8px;
+  padding: 10px;
+  background: #1c1e26;
+  border: 1px solid var(--orange);
+  border-radius: 6px;
+}
+.tool-call-block .tc-name { color: var(--orange); font-weight: 600; font-size: 13px; }
+.tool-call-block .tc-args {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 4px;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* 工具定义 */
+.tool-def {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.tool-def .td-name { color: var(--yellow); font-weight: 600; }
+.tool-def .td-desc { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.tool-def .td-schema {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 8px;
+  background: var(--bg);
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+/* 原始JSON */
+.raw-json {
+  padding: 20px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  color: var(--text2);
+}
+
+/* 搜索 */
+.search-box {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+.search-box input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.search-box input:focus { outline: none; border-color: var(--accent); }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Cline MCP 提示词抓包</h1>
+  <span class="stats" id="stats">等待数据...</span>
+  <div class="actions">
+    <button class="btn" onclick="refresh()">刷新</button>
+    <button class="btn" id="autoRefreshBtn" onclick="toggleAutoRefresh()">自动刷新: 关</button>
+    <button class="btn" onclick="exportAll()">导出</button>
+    <button class="btn" onclick="clearAll()">清空</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="sidebar">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="搜索提示词内容..." oninput="filterCaptures()">
+    </div>
+    <div id="captureList"></div>
+  </div>
+
+  <div class="content-area" id="contentArea">
+    <div class="empty-state">
+      <div style="font-size:32px">📡</div>
+      <div>等待Cline发起请求...</div>
+      <div style="font-size:12px">请确保代理服务器已启动并配置正确</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let captures = [];
+let selectedId = null;
+let autoRefresh = false;
+let autoRefreshTimer = null;
+
+async function refresh() {
+  try {
+    const resp = await fetch('/api/captures');
+    captures = await resp.json();
+    renderList();
+    updateStats();
+    if (selectedId) {
+      const exists = captures.find(c => c.id === selectedId);
+      if (!exists && captures.length > 0) {
+        selectCapture(captures[0].id);
+      }
+    }
+  } catch (e) {
+    console.error('刷新失败:', e);
+  }
+}
+
+function updateStats() {
+  const el = document.getElementById('stats');
+  el.textContent = `已捕获 ${captures.length} 条记录`;
+}
+
+function renderList() {
+  const container = document.getElementById('captureList');
+  const query = document.getElementById('searchInput').value.toLowerCase();
+
+  const filtered = query
+    ? captures.filter(c =>
+        (c.last_user_message || '').toLowerCase().includes(query) ||
+        (c.response_preview || '').toLowerCase().includes(query) ||
+        (c.system_prompt_preview || '').toLowerCase().includes(query) ||
+        (c.model || '').toLowerCase().includes(query) ||
+        (c.tools_used || []).some(t => t.toLowerCase().includes(query))
+      )
+    : captures;
+
+  container.innerHTML = filtered.map(c => {
+    const time = c.datetime ? new Date(c.datetime).toLocaleTimeString('zh-CN') : '';
+    const preview = c.last_user_message || c.response_preview || '(无内容)';
+    return `
+      <div class="capture-item ${c.id === selectedId ? 'selected' : ''}"
+           onclick="selectCapture('${c.id}')">
+        <div class="top">
+          <span class="time">${time}</span>
+          <span class="model">${c.model || ''}</span>
+        </div>
+        <div class="badges">
+          <span class="badge msgs">${c.message_count || 0} 消息</span>
+          ${c.tool_count ? `<span class="badge tools">${c.tool_count} 工具定义</span>` : ''}
+          ${c.has_tool_calls ? '<span class="badge tool-call">工具调用</span>' : ''}
+          ${c.duration_ms ? `<span class="badge duration">${c.duration_ms}ms</span>` : ''}
+        </div>
+        <div class="preview">${escapeHtml(preview)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function selectCapture(id) {
+  selectedId = id;
+  renderList();
+
+  const [messagesResp, toolsResp, fullResp] = await Promise.all([
+    fetch(`/api/captures/${id}/messages`),
+    fetch(`/api/captures/${id}/tools`),
+    fetch(`/api/captures/${id}`),
+  ]);
+
+  const messages = await messagesResp.json();
+  const tools = await toolsResp.json();
+  const full = await fullResp.json();
+
+  renderDetail(messages, tools, full);
+}
+
+function renderDetail(messages, tools, full) {
+  const area = document.getElementById('contentArea');
+
+  const responseMsg = full.response?.message || {};
+
+  area.innerHTML = `
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab(this, 'messages')">
+        消息列表 (${messages.length})
+      </div>
+      <div class="tab" onclick="switchTab(this, 'tools')">
+        工具定义 (${tools.length})
+      </div>
+      <div class="tab" onclick="switchTab(this, 'response')">
+        模型响应
+      </div>
+      <div class="tab" onclick="switchTab(this, 'raw')">
+        原始JSON
+      </div>
+    </div>
+
+    <div class="tab-content active" id="tab-messages">
+      ${messages.map((m, i) => renderMessage(m, i)).join('')}
+    </div>
+
+    <div class="tab-content" id="tab-tools">
+      ${tools.length === 0 ? '<div class="empty-state" style="padding:40px">无工具定义</div>' :
+        tools.map(t => renderToolDef(t)).join('')}
+    </div>
+
+    <div class="tab-content" id="tab-response">
+      ${renderResponseTab(responseMsg, full)}
+    </div>
+
+    <div class="tab-content" id="tab-raw">
+      <div class="raw-json">${escapeHtml(JSON.stringify(full, null, 2))}</div>
+    </div>
+  `;
+}
+
+function renderMessage(msg, index) {
+  const roleClass = `role-${msg.role}`;
+  const roleLabel = {system: 'System', user: 'User', assistant: 'Assistant', tool: 'Tool'}[msg.role] || msg.role;
+  const content = msg.content || '';
+  const isLong = content.length > 2000;
+
+  let toolCallsHtml = '';
+  if (msg.tool_calls) {
+    toolCallsHtml = msg.tool_calls.map(tc => {
+      const func = tc.function || {};
+      let argsFormatted = func.arguments || '';
+      try { argsFormatted = JSON.stringify(JSON.parse(argsFormatted), null, 2); } catch {}
+      return `
+        <div class="tool-call-block">
+          <div class="tc-name">🔧 ${escapeHtml(func.name || '')}</div>
+          <div class="tc-args">${escapeHtml(argsFormatted)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  let nameInfo = '';
+  if (msg.tool_call_id) {
+    nameInfo = `<span style="font-size:11px;color:var(--orange)">tool_call_id: ${msg.tool_call_id}</span>`;
+  }
+
+  return `
+    <div class="message">
+      <div class="msg-header">
+        <span class="role-tag ${roleClass}">${roleLabel}</span>
+        <span class="msg-length">${content.length.toLocaleString()} 字符</span>
+        ${nameInfo}
+        <span style="font-size:11px;color:var(--text2);margin-left:auto">#${index}</span>
+      </div>
+      <div class="msg-content ${isLong ? '' : 'expanded'}" id="msg-${index}">${escapeHtml(content)}</div>
+      ${isLong ? `<span class="expand-btn" onclick="toggleExpand('msg-${index}', this)">展开全部 (${content.length.toLocaleString()} 字符)</span>` : ''}
+      ${toolCallsHtml}
+    </div>
+  `;
+}
+
+function renderToolDef(tool) {
+  const func = tool.function || tool;
+  const schema = func.parameters || func.input_schema || {};
+  return `
+    <div class="tool-def">
+      <div class="td-name">🔧 ${escapeHtml(func.name || tool.name || '')}</div>
+      <div class="td-desc">${escapeHtml(func.description || tool.description || '')}</div>
+      <div class="td-schema">${escapeHtml(JSON.stringify(schema, null, 2))}</div>
+    </div>
+  `;
+}
+
+function renderResponseTab(msg, full) {
+  const content = msg.content || '(无文本内容)';
+  let toolCallsHtml = '';
+  if (msg.tool_calls) {
+    toolCallsHtml = msg.tool_calls.map(tc => {
+      const func = tc.function || {};
+      let argsFormatted = func.arguments || '';
+      try { argsFormatted = JSON.stringify(JSON.parse(argsFormatted), null, 2); } catch {}
+      return `
+        <div class="tool-call-block">
+          <div class="tc-name">🔧 ${escapeHtml(func.name || '')}</div>
+          <div class="tc-args">${escapeHtml(argsFormatted)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  const usage = full.response?.usage;
+  const usageHtml = usage ? `
+    <div style="padding:10px 20px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border)">
+      Token用量: prompt=${usage.prompt_tokens || '?'}, completion=${usage.completion_tokens || '?'}, total=${usage.total_tokens || '?'}
+    </div>
+  ` : '';
+
+  return `
+    ${usageHtml}
+    <div style="padding:10px 20px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border)">
+      finish_reason: ${full.response?.finish_reason || '?'}
+      | streaming: ${full.response?.streaming ? '是' : '否'}
+      | 耗时: ${full.duration_ms || '?'}ms
+    </div>
+    <div class="message">
+      <div class="msg-header">
+        <span class="role-tag role-assistant">Assistant Response</span>
+        <span class="msg-length">${content.length.toLocaleString()} 字符</span>
+      </div>
+      <div class="msg-content expanded">${escapeHtml(content)}</div>
+      ${toolCallsHtml}
+    </div>
+  `;
+}
+
+function switchTab(el, tabId) {
+  el.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+  document.getElementById(`tab-${tabId}`).classList.add('active');
+}
+
+function toggleExpand(id, btn) {
+  const el = document.getElementById(id);
+  el.classList.toggle('expanded');
+  btn.textContent = el.classList.contains('expanded') ? '收起' : '展开全部';
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function filterCaptures() {
+  renderList();
+}
+
+function toggleAutoRefresh() {
+  autoRefresh = !autoRefresh;
+  const btn = document.getElementById('autoRefreshBtn');
+  if (autoRefresh) {
+    btn.textContent = '自动刷新: 开';
+    btn.classList.add('active');
+    autoRefreshTimer = setInterval(refresh, 3000);
+  } else {
+    btn.textContent = '自动刷新: 关';
+    btn.classList.remove('active');
+    clearInterval(autoRefreshTimer);
+  }
+}
+
+async function exportAll() {
+  const resp = await fetch('/api/export');
+  const data = await resp.json();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cline_captures_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function clearAll() {
+  if (!confirm('确定清空所有捕获记录？')) return;
+  await fetch('/api/clear', { method: 'POST' });
+  captures = [];
+  selectedId = null;
+  renderList();
+  document.getElementById('contentArea').innerHTML = '<div class="empty-state"><div>已清空</div></div>';
+  updateStats();
+}
+
+// 初始化
+refresh();
+</script>
+</body>
+</html>
