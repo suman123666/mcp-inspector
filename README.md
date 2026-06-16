@@ -63,21 +63,34 @@ sequenceDiagram
 
 **链路一：Cline ↔ LLM（HTTP 代理）**
 
-```mermaid
-flowchart LR
-    U[用户] <--> C["Cline\n(VSCode)"]
-    C <--> P["HTTP 代理\n(port 8001)"]
-    P <--> L[LLM]
-    P -->|保存提示词| W["Web UI\n查看提示词"]
+```
++------+     +----------+     +--------------+     +-----+
+| User |<--->|  Cline   |<--->|  HTTP Proxy  |<--->| LLM |
+| 用户 |     | (VSCode) |     |  (port 8001) |     |     |
++------+     +----------+     +------+-------+     +-----+
+                                      |
+                                 保存提示词
+                                      |
+                              +-------v------+
+                              |    Web UI    |
+                              |  查看提示词  |
+                              +--------------+
 ```
 
 **链路二：Cline ↔ MCP Server（stdio 代理）**
 
-```mermaid
-flowchart LR
-    C["Cline\n(VSCode)"] <--> S["stdio 代理\n(包装器)"]
-    S <--> M["MCP Server\n(实际服务)"]
-    S -->|保存MCP通信| J[JSONL 日志]
+```
++----------+     +--------------+     +--------------+
+|  Cline   |<--->| stdio Proxy  |<--->|  MCP Server  |
+| (VSCode) |     |  (包装器)    |     |  (实际服务)  |
++----------+     +------+-------+     +--------------+
+                         |
+                    保存 MCP 通信
+                         |
+                 +-------v------+
+                 |  JSONL logs  |
+                 |  MCP 日志    |
+                 +--------------+
 ```
 
 ## 快速开始
