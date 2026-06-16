@@ -198,25 +198,6 @@ header .actions { margin-left: auto; display: flex; gap: 8px; }
   overflow-y: auto;
 }
 
-/* 工具定义 */
-.tool-def {
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-}
-.tool-def .td-name { color: var(--yellow); font-weight: 600; }
-.tool-def .td-desc { font-size: 12px; color: var(--text2); margin-top: 4px; }
-.tool-def .td-schema {
-  font-size: 11px;
-  color: var(--text2);
-  margin-top: 8px;
-  background: var(--bg);
-  padding: 8px;
-  border-radius: 4px;
-  max-height: 200px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-}
-
 /* 原始JSON */
 .raw-json {
   padding: 20px;
@@ -256,6 +237,8 @@ header .actions { margin-left: auto; display: flex; gap: 8px; }
 
 <header>
   <h1>Cline MCP 提示词抓包</h1>
+  <button class="btn active" id="llmModeBtn" onclick="switchMode('llm')">LLM 通信</button>
+  <button class="btn" id="mcpModeBtn" onclick="switchMode('mcp')">MCP 通信</button>
   <span class="stats" id="stats">等待数据...</span>
   <div class="actions">
     <button class="btn" onclick="refresh()">刷新</button>
@@ -289,6 +272,7 @@ let autoRefresh = false;
 let autoRefreshTimer = null;
 
 async function refresh() {
+  if (mode === 'mcp') { await refreshMcpLogs(); return; }
   try {
     const resp = await fetch('/api/captures');
     captures = await resp.json();
@@ -350,20 +334,18 @@ async function selectCapture(id) {
   selectedId = id;
   renderList();
 
-  const [messagesResp, toolsResp, fullResp] = await Promise.all([
+  const [messagesResp, fullResp] = await Promise.all([
     fetch(`/api/captures/${id}/messages`),
-    fetch(`/api/captures/${id}/tools`),
     fetch(`/api/captures/${id}`),
   ]);
 
   const messages = await messagesResp.json();
-  const tools = await toolsResp.json();
   const full = await fullResp.json();
 
-  renderDetail(messages, tools, full);
+  renderDetail(messages, full);
 }
 
-function renderDetail(messages, tools, full) {
+function renderDetail(messages, full) {
   const area = document.getElementById('contentArea');
 
   const responseMsg = full.response?.message || {};
@@ -372,9 +354,6 @@ function renderDetail(messages, tools, full) {
     <div class="tabs">
       <div class="tab active" onclick="switchTab(this, 'messages')">
         消息列表 (${messages.length})
-      </div>
-      <div class="tab" onclick="switchTab(this, 'tools')">
-        工具定义 (${tools.length})
       </div>
       <div class="tab" onclick="switchTab(this, 'response')">
         模型响应
@@ -386,11 +365,6 @@ function renderDetail(messages, tools, full) {
 
     <div class="tab-content active" id="tab-messages">
       ${messages.map((m, i) => renderMessage(m, i)).join('')}
-    </div>
-
-    <div class="tab-content" id="tab-tools">
-      ${tools.length === 0 ? '<div class="empty-state" style="padding:40px">无工具定义</div>' :
-        tools.map(t => renderToolDef(t)).join('')}
     </div>
 
     <div class="tab-content" id="tab-response">
@@ -440,18 +414,6 @@ function renderMessage(msg, index) {
       <div class="msg-content ${isLong ? '' : 'expanded'}" id="msg-${index}">${escapeHtml(content)}</div>
       ${isLong ? `<span class="expand-btn" onclick="toggleExpand('msg-${index}', this)">展开全部 (${content.length.toLocaleString()} 字符)</span>` : ''}
       ${toolCallsHtml}
-    </div>
-  `;
-}
-
-function renderToolDef(tool) {
-  const func = tool.function || tool;
-  const schema = func.parameters || func.input_schema || {};
-  return `
-    <div class="tool-def">
-      <div class="td-name">🔧 ${escapeHtml(func.name || tool.name || '')}</div>
-      <div class="td-desc">${escapeHtml(func.description || tool.description || '')}</div>
-      <div class="td-schema">${escapeHtml(JSON.stringify(schema, null, 2))}</div>
     </div>
   `;
 }
@@ -554,6 +516,122 @@ async function clearAll() {
   renderList();
   document.getElementById('contentArea').innerHTML = '<div class="empty-state"><div>已清空</div></div>';
   updateStats();
+}
+
+// ─── MCP 通信模式 ────────────────────────────────
+let mode = 'llm';
+let mcpLogs = [];
+let selectedMcpLog = null;
+
+function switchMode(newMode) {
+  mode = newMode;
+  document.getElementById('llmModeBtn').classList.toggle('active', mode === 'llm');
+  document.getElementById('mcpModeBtn').classList.toggle('active', mode === 'mcp');
+  document.getElementById('captureList').innerHTML = '';
+  document.getElementById('contentArea').innerHTML = '<div class="empty-state"><div style="font-size:32px">📡</div><div>加载中...</div></div>';
+  selectedId = null;
+  selectedMcpLog = null;
+  refresh();
+}
+
+async function refreshMcpLogs() {
+  try {
+    const resp = await fetch('/api/mcp-logs');
+    mcpLogs = await resp.json();
+    renderMcpList();
+    document.getElementById('stats').textContent = `MCP 日志 ${mcpLogs.length} 个会话`;
+  } catch (e) {
+    console.error('MCP日志加载失败:', e);
+  }
+}
+
+function renderMcpList() {
+  const container = document.getElementById('captureList');
+  if (mcpLogs.length === 0) {
+    container.innerHTML = '<div style="padding:20px;color:var(--text2);font-size:13px;line-height:1.8">暂无MCP日志<br>配置 stdio 代理后<br>日志自动保存到 mcp_logs/</div>';
+    return;
+  }
+  container.innerHTML = mcpLogs.map(log => {
+    const time = log.start_time ? new Date(log.start_time).toLocaleTimeString('zh-CN') : '';
+    return `
+      <div class="capture-item ${log.filename === selectedMcpLog ? 'selected' : ''}"
+           onclick="selectMcpLog('${escapeHtml(log.filename)}')">
+        <div class="top">
+          <span class="time">${time}</span>
+          <span class="model" style="color:var(--green)">${escapeHtml(log.server_name)}</span>
+        </div>
+        <div class="badges">
+          <span class="badge msgs">${log.message_count} 消息</span>
+        </div>
+        <div class="preview">${escapeHtml(log.filename)}</div>
+      </div>`;
+  }).join('');
+}
+
+async function selectMcpLog(filename) {
+  selectedMcpLog = filename;
+  renderMcpList();
+  const resp = await fetch(`/api/mcp-logs/${encodeURIComponent(filename)}`);
+  const entries = await resp.json();
+  renderMcpDetail(filename, entries);
+}
+
+function renderMcpDetail(filename, entries) {
+  const area = document.getElementById('contentArea');
+  const messagesHtml = entries.map(entry => {
+    const dir = entry.direction;
+    const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('zh-CN') : '';
+    const parsed = entry.parsed || {};
+
+    if (dir === 'proxy') {
+      const ev = parsed.event || '';
+      const label = ev === 'start'
+        ? `启动 · server=${escapeHtml(parsed.server_name || '')}`
+        : `退出 · code=${parsed.returncode ?? ''}`;
+      return `<div style="padding:8px 20px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:12px;color:var(--text2)">
+        <span>${time}</span>&nbsp;&nbsp;<span>[代理] ${label}</span></div>`;
+    }
+
+    const isReq = dir === 'client->server';
+    const dirLabel = isReq ? 'Cline → MCP Server' : 'MCP Server → Cline';
+    const dirColor = isReq ? 'var(--yellow)' : 'var(--green)';
+    const msgId = parsed.id != null ? `<span style="color:var(--text2);margin-left:6px">#${parsed.id}</span>` : '';
+    const method = parsed.method || '';
+
+    let bodyHtml;
+    if (method) {
+      const params = parsed.params;
+      bodyHtml = `<div style="color:var(--yellow);font-weight:600;margin-bottom:6px">${escapeHtml(method)}</div>
+        ${params != null ? `<div class="msg-content expanded" style="max-height:300px;font-size:12px">${escapeHtml(JSON.stringify(params, null, 2))}</div>` : ''}`;
+    } else if ('result' in parsed) {
+      bodyHtml = `<div style="color:var(--green);font-weight:600;margin-bottom:6px">result</div>
+        <div class="msg-content expanded" style="max-height:300px;font-size:12px">${escapeHtml(JSON.stringify(parsed.result, null, 2))}</div>`;
+    } else if ('error' in parsed) {
+      bodyHtml = `<div style="color:var(--red);font-weight:600;margin-bottom:6px">error</div>
+        <div class="msg-content expanded" style="color:var(--red);font-size:12px">${escapeHtml(JSON.stringify(parsed.error, null, 2))}</div>`;
+    } else {
+      bodyHtml = `<div class="msg-content expanded" style="font-size:12px">${escapeHtml(JSON.stringify(parsed, null, 2))}</div>`;
+    }
+
+    return `<div class="message">
+      <div class="msg-header">
+        <span style="font-size:11px;font-weight:600;color:${dirColor}">${dirLabel}</span>${msgId}
+        <span style="font-size:11px;color:var(--text2);margin-left:auto">${time}</span>
+      </div>
+      ${bodyHtml}
+    </div>`;
+  }).join('');
+
+  area.innerHTML = `
+    <div style="padding:10px 20px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:12px;color:var(--text2);position:sticky;top:0;z-index:10">
+      ${escapeHtml(filename)}&nbsp;&nbsp;·&nbsp;&nbsp;${entries.length} 条记录
+    </div>
+    <div style="padding:6px 20px;border-bottom:1px solid var(--border);background:var(--bg);font-size:11px;color:var(--text2);display:flex;gap:20px;flex-wrap:wrap">
+      <span><span style="color:var(--yellow)">●</span> Cline → MCP Server</span>
+      <span><span style="color:var(--green)">●</span> MCP Server → Cline</span>
+      <span><span style="color:var(--red)">●</span> 错误</span>
+    </div>
+    ${messagesHtml}`;
 }
 
 // 初始化

@@ -2,100 +2,89 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-
-# Initialize FastMCP server
 mcp = FastMCP("weather", log_level="ERROR")
 
+OPEN_METEO_BASE = "https://api.open-meteo.com/v1"
 
-# Constants
-NWS_API_BASE = "https://api.weather.gov"
-USER_AGENT = "weather-app/1.0"
+WMO_CODES: dict[int, str] = {
+    0: "晴天", 1: "基本晴朗", 2: "局部多云", 3: "阴天",
+    45: "雾", 48: "雾凇",
+    51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "冰粒",
+    80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
+    85: "小阵雪", 86: "大阵雪",
+    95: "雷暴", 96: "冰雹雷暴", 99: "强冰雹雷暴",
+}
 
 
-async def make_nws_request(url: str) -> dict[str, Any] | None:
-    """Make a request to the NWS API with proper error handling."""
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/geo+json"
-    }
+async def fetch(params: dict) -> dict[str, Any] | None:
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
+            r = await client.get(f"{OPEN_METEO_BASE}/forecast", params=params, timeout=30.0)
+            r.raise_for_status()
+            return r.json()
         except Exception:
             return None
 
 
-def format_alert(feature: dict) -> str:
-    """Format an alert feature into a readable string."""
-    props = feature["properties"]
-    return f"""
-Event: {props.get('event', 'Unknown')}
-Area: {props.get('areaDesc', 'Unknown')}
-Severity: {props.get('severity', 'Unknown')}
-Description: {props.get('description', 'No description available')}
-Instructions: {props.get('instruction', 'No specific instructions provided')}
-"""
-
-
-@mcp.tool()
-async def get_alerts(state: str) -> str:
-    """Get weather alerts for a US state.
-
-    Args:
-        state: Two-letter US state code (e.g. CA, NY)
-    """
-    url = f"{NWS_API_BASE}/alerts/active/area/{state}"
-    data = await make_nws_request(url)
-
-    if not data or "features" not in data:
-        return "Unable to fetch alerts or no alerts found."
-
-    if not data["features"]:
-        return "No active alerts for this state."
-
-    alerts = [format_alert(feature) for feature in data["features"]]
-    return "\n---\n".join(alerts)
-
-
 @mcp.tool()
 async def get_forecast(latitude: float, longitude: float) -> str:
-    """Get weather forecast for a location.
+    """Get 5-day weather forecast for a location.
 
     Args:
         latitude: Latitude of the location
         longitude: Longitude of the location
     """
-    # First get the forecast grid endpoint
-    points_url = f"{NWS_API_BASE}/points/{latitude},{longitude}"
-    points_data = await make_nws_request(points_url)
+    data = await fetch({
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "temperature_2m_max,temperature_2m_min,weather_code,wind_speed_10m_max,precipitation_sum",
+        "forecast_days": 5,
+        "timezone": "auto",
+    })
+    if not data or "daily" not in data:
+        return "Unable to fetch forecast data."
 
-    if not points_data:
-        return "Unable to fetch forecast data for this location."
+    d = data["daily"]
+    lines = []
+    for i in range(len(d["time"])):
+        desc = WMO_CODES.get(d["weather_code"][i], f"code={d['weather_code'][i]}")
+        lines.append(
+            f"{d['time'][i]}: {desc}, "
+            f"最高 {d['temperature_2m_max'][i]}°C / 最低 {d['temperature_2m_min'][i]}°C, "
+            f"风速 {d['wind_speed_10m_max'][i]} km/h, 降水 {d['precipitation_sum'][i]} mm"
+        )
+    return "\n".join(lines)
 
-    # Get the forecast URL from the points response
-    forecast_url = points_data["properties"]["forecast"]
-    forecast_data = await make_nws_request(forecast_url)
 
-    if not forecast_data:
-        return "Unable to fetch detailed forecast."
+@mcp.tool()
+async def get_current_weather(latitude: float, longitude: float) -> str:
+    """Get current weather conditions for a location.
 
-    # Format the periods into a readable forecast
-    periods = forecast_data["properties"]["periods"]
-    forecasts = []
-    for period in periods[:5]:  # Only show next 5 periods
-        forecast = f"""
-{period['name']}:
-Temperature: {period['temperature']}°{period['temperatureUnit']}
-Wind: {period['windSpeed']} {period['windDirection']}
-Forecast: {period['detailedForecast']}
-"""
-        forecasts.append(forecast)
+    Args:
+        latitude: Latitude of the location
+        longitude: Longitude of the location
+    """
+    data = await fetch({
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,precipitation",
+        "timezone": "auto",
+    })
+    if not data or "current" not in data:
+        return "Unable to fetch current weather."
 
-    return "\n---\n".join(forecasts)
+    c = data["current"]
+    desc = WMO_CODES.get(c.get("weather_code", 0), f"code={c.get('weather_code')}")
+    return (
+        f"当前天气: {desc}\n"
+        f"温度: {c.get('temperature_2m')}°C\n"
+        f"湿度: {c.get('relative_humidity_2m')}%\n"
+        f"风速: {c.get('wind_speed_10m')} km/h\n"
+        f"降水: {c.get('precipitation')} mm"
+    )
 
 
 if __name__ == "__main__":
-    # Initialize and run the server
     mcp.run(transport='stdio')

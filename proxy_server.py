@@ -42,6 +42,7 @@ from flask_cors import CORS
 # ──────────────────────────────────────────────
 DATA_DIR = Path(__file__).parent / "captures"
 DATA_DIR.mkdir(exist_ok=True)
+MCP_LOGS_DIR = Path(__file__).parent / "mcp_logs"
 
 app = Flask(__name__, static_folder="web")
 CORS(app)
@@ -512,6 +513,63 @@ def clear_captures():
     """清空内存中的捕获记录"""
     CAPTURES.clear()
     return jsonify({"status": "cleared"})
+
+
+# ──────────────────────────────────────────────
+# API路由 - MCP日志
+# ──────────────────────────────────────────────
+@app.route("/api/mcp-logs", methods=["GET"])
+def list_mcp_logs():
+    """列出所有MCP日志文件"""
+    if not MCP_LOGS_DIR.exists():
+        return jsonify([])
+    logs = []
+    for f in sorted(MCP_LOGS_DIR.glob("*.jsonl"), reverse=True):
+        entries = []
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(json.loads(line))
+        except Exception:
+            continue
+        server_name, start_time, msg_count = "unknown", None, 0
+        for entry in entries:
+            parsed = entry.get("parsed", {})
+            if entry.get("direction") == "proxy" and parsed.get("event") == "start":
+                server_name = parsed.get("server_name", "unknown")
+                start_time = entry.get("timestamp")
+            elif entry.get("direction") in ("client->server", "server->client"):
+                msg_count += 1
+        if msg_count > 0:
+            logs.append({
+                "filename": f.name,
+                "server_name": server_name,
+                "start_time": start_time,
+                "message_count": msg_count,
+            })
+    return jsonify(logs)
+
+
+@app.route("/api/mcp-logs/<filename>", methods=["GET"])
+def get_mcp_log(filename):
+    """获取指定MCP日志文件内容"""
+    if not filename.endswith(".jsonl") or "/" in filename or "\\" in filename:
+        return jsonify({"error": "invalid filename"}), 400
+    filepath = MCP_LOGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": "not found"}), 404
+    entries = []
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(entries)
 
 
 # ──────────────────────────────────────────────

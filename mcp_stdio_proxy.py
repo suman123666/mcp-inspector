@@ -172,12 +172,19 @@ def main():
         "server_name": server_name,
     }))
 
+    # 清除父进程的 Python venv 环境变量，避免影响子进程的 Python 版本选择
+    child_env = os.environ.copy()
+    for _key in ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "__PYVENV_LAUNCHER__",
+                 "PYTHONPATH", "PYTHONHOME"):
+        child_env.pop(_key, None)
+
     # 启动真实的MCP服务器
     proc = subprocess.Popen(
         cmd_args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=child_env,
     )
 
     # 启动转发线程
@@ -199,7 +206,7 @@ def main():
 
     log_fh.close()
     print(f"[MCP代理] 进程退出 | code={returncode}", file=sys.stderr)
-    sys.exit(returncode)
+    os._exit(returncode)  # 跳过 Python 清理，避免守护线程与主线程竞争 stdin 锁
 
 
 if __name__ == "__main__":
